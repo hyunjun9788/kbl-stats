@@ -1,0 +1,8 @@
+packages:
+  - "apps/*"
+
+# apps/web(create-next-app)이 자동으로 만든 설정을 루트로 병합.
+# sharp, unrs-resolver 같은 네이티브 패키지의 설치 스크립트를 자동 실행하지 않는다.
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver

@@ -1,2 +1,18 @@
 .DS_Store
 *.zip
+
+# dependencies
+node_modules/
+
+# build output
+.next/
+dist/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
