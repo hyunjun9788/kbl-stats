@@ -1,7 +1,16 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// KBL 어드밴스드 스탯 서비스 — 데이터 스키마
+//
+// 설계 원칙 (plan.md 12장):
+//   수집 단위는 "경기별 박스스코어"다. 시즌 누적·순위·Elo·percentile은 전부 여기서 파생된다.
+//   따라서 스키마를 세 계층으로 나눈다.
+//
+//   계층 1 — 원천 : KBL API 응답을 그대로 적재. batch가 upsert 한다.
+//   계층 2 — 파생 : 집계 파이프라인이 매 batch 전체 재계산한다 (truncate 후 rebuild).
+//   계층 3 — 모델 : Elo 레이팅 / 예측 / 백테스트 검증 결과.
+//   운영         : 원천 API 응답 원본 스냅샷 + batch 실행 로그.
+//
+// 시즌 범위: 스키마는 1997~현재 전 시즌을 수용한다. 초기 개발은 최근 몇 시즌만 수집하고,
+//            파이프라인 검증 후 과거 시즌을 backfill 한다. 옛 시즌에 없는 지표는 nullable 로 흡수한다.
 
 generator client {
   provider = "prisma-client"
@@ -10,4 +19,426 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+/// ────────────────────────────────────────────────────────────────────────────
+/// 계층 1 — 원천 (KBL API 를 그대로 적재)
+/// ────────────────────────────────────────────────────────────────────────────
+
+model Season {
+  id            Int    @id @default(autoincrement())
+  kblSeasonCode Int    @unique /// 연도가 아니라 일련번호. 2025-2026 시즌 = 47
+  name          String /// "2025-2026"
+  startYear     Int
+  gameMinutes   Int    @default(40) /// KBL 은 40분 경기. advanced stat 계산 기준
+
+  /// 자격 기준 (plan.md 2.1). UI 에 노출하므로 시즌별로 저장하고 조정 가능하게 둔다.
+  minGames          Int   @default(38) /// 팀 경기수의 70% (54경기 기준 37.8 → 38)
+  minMinutesPerGame Float @default(15)
+
+  isCurrent Boolean @default(false)
+
+  games             Game[]
+  playerSeasonStats PlayerSeasonStat[]
+  standings         TeamSeasonStanding[]
+  metricRankings    SeasonMetricRanking[]
+  modelEvaluations  ModelEvaluation[]
+
+  @@index([startYear])
+}
+
+model Team {
+  id             Int     @id @default(autoincrement())
+  kblTeamCode    String  @unique /// "00" = 합계 행. 적재하지 않는다.
+  name           String
+  shortName      String
+  colorPrimary   String?
+  colorSecondary String?
+
+  homeGames         Game[]               @relation("HomeTeam")
+  awayGames         Game[]               @relation("AwayTeam")
+  playerGameStats   PlayerGameStat[]
+  teamGameStats     TeamGameStat[]
+  playerSeasonStats PlayerSeasonStat[]
+  standings         TeamSeasonStanding[]
+  ratingSnapshots   TeamRatingSnapshot[]
+}
+
+model Player {
+  id          Int     @id @default(autoincrement())
+  kblPlayerNo String  @unique
+  koreanName  String
+  englishName String?
+  position    String? /// KBL pos 문자열 (G / F / C / GF ...). 정규화는 애플리케이션에서.
+  heightCm    Float?
+  weightKg    Float?
+  draftInfo   String? /// 미해결 (spike 8장). 후속 확보 전까지 null.
+
+  gameStats   PlayerGameStat[]
+  seasonStats PlayerSeasonStat[]
+  careerStat  PlayerCareerStat?
+
+  @@index([koreanName])
+}
+
+model Game {
+  id                Int      @id @default(autoincrement())
+  gmkey             String   @unique /// 예: S47G01N214 (시즌47 / 대회01 / 경기214)
+  seasonId          Int
+  gameDate          DateTime
+  tipOff            String? /// "19:00"
+  stadium           String?
+  homeTeamId        Int
+  awayTeamId        Int
+  homeScore         Int?
+  awayScore         Int?
+  isEnded           Boolean  @default(false)
+  gameType          GameType @default(REGULAR)
+  kblSeasonCategory String? /// 원본 값 ("R" 등). 정규시즌 필터 = "R" && kblGameCode "01"
+  kblGameCode       String? /// 원본 값 ("01" 등)
+
+  season          Season               @relation(fields: [seasonId], references: [id])
+  homeTeam        Team                 @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeam        Team                 @relation("AwayTeam", fields: [awayTeamId], references: [id])
+  playerGameStats PlayerGameStat[]
+  teamGameStats   TeamGameStat[]
+  predictions     GamePrediction[]
+  ratingSnapshots TeamRatingSnapshot[]
+
+  @@index([seasonId, gameDate])
+  @@index([gameDate])
+  @@index([isEnded])
+}
+
+/// 경기별 선수 박스스코어. 이 프로젝트의 수집 단위이자 모든 파생 데이터의 근거.
+model PlayerGameStat {
+  id            Int      @id @default(autoincrement())
+  gameId        Int
+  playerId      Int
+  teamId        Int /// 이 경기에서의 소속팀. 이적 선수는 경기마다 다를 수 있다.
+  isHome        Boolean
+  isStarter     Boolean?
+  secondsPlayed Int
+
+  // counting stat (원본)
+  points    Int
+  fgm       Int /// 전체 야투 성공 (KBL fdg)
+  fga       Int /// 전체 야투 시도 (KBL fdgA)
+  fg2m      Int? /// 2점 (KBL fg). null 이면 fgm - fg3m 으로 파생
+  fg2a      Int?
+  fg3m      Int
+  fg3a      Int
+  ftm       Int
+  fta       Int
+  offReb    Int?
+  defReb    Int?
+  reb       Int
+  ast       Int
+  stl       Int
+  blk       Int
+  tov       Int
+  pf        Int
+  plusMinus Int? /// 옛 시즌에는 없음
+
+  // KBL 이 제공하는 어드밴스드 스탯 "원본". 우리는 직접 계산해서 계층 2 에 저장하고,
+  // 이 값들은 검산용 대조군으로만 쓴다 (spike 4장: 시즌 집계 USG% 가 약 1/5로 어긋났다).
+  srcPer    Float?
+  srcPie    Float?
+  srcTsPct  Float?
+  srcEfgPct Float?
+  srcUsgPct Float?
+  srcAstPct Float?
+  srcTovPct Float?
+
+  game   Game   @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id])
+  team   Team   @relation(fields: [teamId], references: [id])
+
+  @@unique([gameId, playerId]) /// batch upsert 키
+  @@index([playerId])
+  @@index([teamId])
+}
+
+/// 경기별 팀 합계. USG% / pace / ORtg 의 분모로 필요하다 (선수 합산으로 대체하지 않는다).
+model TeamGameStat {
+  id            Int     @id @default(autoincrement())
+  gameId        Int
+  teamId        Int
+  isHome        Boolean
+  secondsPlayed Int /// 팀 총 출전초 = 40분 × 5 (+ 연장). advanced stat 분모.
+
+  points Int
+  fgm    Int
+  fga    Int
+  fg3m   Int
+  fg3a   Int
+  ftm    Int
+  fta    Int
+  offReb Int?
+  defReb Int?
+  reb    Int
+  ast    Int
+  stl    Int
+  blk    Int
+  tov    Int
+  pf     Int
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id])
+
+  @@unique([gameId, teamId])
+}
+
+/// ────────────────────────────────────────────────────────────────────────────
+/// 계층 2 — 파생 (집계 파이프라인이 매 batch 전체 재계산)
+/// ────────────────────────────────────────────────────────────────────────────
+
+/// 선수 × 시즌 누적/평균. PlayerGameStat 합산 + 어드밴스드 직접 계산 결과.
+model PlayerSeasonStat {
+  id            Int  @id @default(autoincrement())
+  playerId      Int
+  seasonId      Int
+  teamId        Int /// 시즌 마지막 소속 (이적 시)
+  games         Int
+  gamesStarted  Int?
+  secondsPlayed Int
+
+  // 누적 counting
+  points Int
+  fgm    Int
+  fga    Int
+  fg3m   Int
+  fg3a   Int
+  ftm    Int
+  fta    Int
+  offReb Int
+  defReb Int
+  reb    Int
+  ast    Int
+  stl    Int
+  blk    Int
+  tov    Int
+  pf     Int
+
+  // 직접 계산한 어드밴스드 (40분 기준). 방향 반전(TOV%)은 percentile 단계에서 처리.
+  tsPct  Float?
+  efgPct Float?
+  usgPct Float?
+  astPct Float?
+  tovPct Float?
+  per    Float?
+  pie    Float?
+  offRtg Float?
+  defRtg Float?
+  netRtg Float?
+  pace   Float?
+
+  qualified  Boolean  @default(false) /// 자격 기준 통과 → percentile 모집단에 포함
+  computedAt DateTime @default(now())
+
+  player   Player                @relation(fields: [playerId], references: [id])
+  season   Season                @relation(fields: [seasonId], references: [id])
+  team     Team                  @relation(fields: [teamId], references: [id])
+  rankings SeasonMetricRanking[]
+
+  @@unique([playerId, seasonId])
+  @@index([seasonId, qualified])
+}
+
+/// 선수 통산 (비교 화면의 "통산" 탭). 시즌을 섞지 않으려 별도 테이블로 둔다.
+model PlayerCareerStat {
+  id            Int @id @default(autoincrement())
+  playerId      Int @unique
+  seasons       Int
+  games         Int
+  secondsPlayed Int
+
+  points Int
+  fgm    Int
+  fga    Int
+  fg3m   Int
+  fg3a   Int
+  ftm    Int
+  fta    Int
+  reb    Int
+  ast    Int
+  stl    Int
+  blk    Int
+  tov    Int
+
+  tsPct Float?
+  per   Float?
+  pie   Float?
+
+  computedAt DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id])
+}
+
+/// Percentile / 순위. long format — 모집단이 시즌마다 다르고 V2 에서 포지션별로 쪼개진다.
+model SeasonMetricRanking {
+  id                 Int           @id @default(autoincrement())
+  playerSeasonStatId Int
+  seasonId           Int /// 조회 인덱스용 (playerSeasonStat 경유 중복이지만 유지)
+  metric             RankingMetric
+  value              Float /// 해당 지표의 실제 값
+  percentileRaw      Float /// 0~100, 반올림 전
+  percentileBucket   Int /// 5%p 단위 반올림 (plan.md 2.1 — 표본 해상도 한계)
+  rank               Int
+  population         Int /// 자격 통과 인원 (예: 61)
+  computedAt         DateTime      @default(now())
+
+  playerSeasonStat PlayerSeasonStat @relation(fields: [playerSeasonStatId], references: [id], onDelete: Cascade)
+  season           Season           @relation(fields: [seasonId], references: [id])
+
+  @@unique([playerSeasonStatId, metric])
+  @@index([seasonId, metric])
+}
+
+/// 팀 시즌 순위. Game 결과에서 파생.
+model TeamSeasonStanding {
+  id          Int     @id @default(autoincrement())
+  seasonId    Int
+  teamId      Int
+  wins        Int
+  losses      Int
+  winPct      Float
+  gamesBehind Float
+  streak      String? /// "W3"
+  last5       String? /// "WWLWW"
+  homeWins    Int     @default(0)
+  homeLosses  Int     @default(0)
+  awayWins    Int     @default(0)
+  awayLosses  Int     @default(0)
+
+  computedAt DateTime @default(now())
+
+  season Season @relation(fields: [seasonId], references: [id])
+  team   Team   @relation(fields: [teamId], references: [id])
+
+  @@unique([seasonId, teamId])
+}
+
+/// ────────────────────────────────────────────────────────────────────────────
+/// 계층 3 — 모델 (Elo / 예측 / 검증)
+/// ────────────────────────────────────────────────────────────────────────────
+
+/// 경기 순서대로 리플레이한 Elo 레이팅. 경기당 (사전/사후) 한 쌍.
+model TeamRatingSnapshot {
+  id           Int      @id @default(autoincrement())
+  teamId       Int
+  gameId       Int
+  modelVersion String
+  ratingPre    Float
+  ratingPost   Float
+  date         DateTime
+
+  team Team @relation(fields: [teamId], references: [id])
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, gameId, modelVersion])
+  @@index([modelVersion, date])
+}
+
+/// 예정 경기 예상 승률. plan.md 2.3 / 9장.
+model GamePrediction {
+  id            Int      @id @default(autoincrement())
+  gameId        Int
+  modelVersion  String
+  homeWinProb   Float
+  awayWinProb   Float
+  homeRatingPre Float?
+  awayRatingPre Float?
+  features      Json? /// "예측 근거 보기" 에 노출할 요소들
+  createdAt     DateTime @default(now())
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, modelVersion])
+}
+
+/// 백테스트 결과. 반드시 베이스라인과 함께 저장한다 (plan.md 2.3).
+model ModelEvaluation {
+  id                  Int      @id @default(autoincrement())
+  modelVersion        String
+  seasonId            Int
+  sampleSize          Int
+  accuracy            Float
+  brierScore          Float
+  logLoss             Float
+  baselineHomeBrier   Float /// "홈팀 무조건 승"
+  baselineWinPctBrier Float /// "승률 높은 팀 승"
+  evaluatedAt         DateTime @default(now())
+
+  season Season @relation(fields: [seasonId], references: [id])
+
+  @@unique([modelVersion, seasonId])
+}
+
+/// ────────────────────────────────────────────────────────────────────────────
+/// 운영 — 원천 스냅샷 & batch 로그
+/// ────────────────────────────────────────────────────────────────────────────
+
+/// KBL API 응답 원본. 파싱 로직을 고쳐도 재fetch 없이 재적재/재계산할 수 있게 보관한다.
+model RawApiResponse {
+  id             BigInt   @id @default(autoincrement())
+  source         String /// "stats" | "game" | "meta"
+  endpoint       String
+  params         Json
+  statusCode     Int
+  payload        Json
+  fetchedAt      DateTime @default(now())
+  ingestionRunId Int?
+
+  ingestionRun IngestionRun? @relation(fields: [ingestionRunId], references: [id])
+
+  @@index([endpoint, fetchedAt])
+  @@index([ingestionRunId])
+}
+
+model IngestionRun {
+  id            Int       @id @default(autoincrement())
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  status        RunStatus @default(RUNNING)
+  trigger       String /// "schedule" | "manual" | "backfill"
+  gamesIngested Int       @default(0)
+  notes         String?
+  error         String?
+
+  rawResponses RawApiResponse[]
+}
+
+enum GameType {
+  REGULAR
+  PLAYOFF
+  CHAMPIONSHIP
+  PRESEASON
+  ALLSTAR
+  OTHER
+}
+
+enum RankingMetric {
+  PTS
+  REB
+  AST
+  STL
+  BLK
+  FG_PCT
+  FG3_PCT
+  FT_PCT
+  TS_PCT
+  EFG_PCT
+  USG_PCT
+  AST_PCT
+  TOV_PCT
+  PER
+  PIE
+}
+
+enum RunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  PARTIAL
 }
