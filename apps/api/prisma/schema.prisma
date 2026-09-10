@@ -118,6 +118,7 @@ model PlayerGameStat {
   teamId        Int /// 이 경기에서의 소속팀. 이적 선수는 경기마다 다를 수 있다.
   isHome        Boolean
   isStarter     Boolean?
+  jerseyNumber  String? /// 이 경기 등번호. 시즌·팀에 따라 바뀌므로 Player 가 아니라 여기 저장.
   secondsPlayed Int
 
   // counting stat (원본)
