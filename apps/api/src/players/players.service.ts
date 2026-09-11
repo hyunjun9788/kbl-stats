@@ -37,10 +37,9 @@ export class PlayersService {
     const rows = await this.prisma.playerSeasonStat.findMany({
       where: { seasonId: season.id },
       include: { player: true, team: true },
-      orderBy: { points: 'desc' },
     });
 
-    return rows.map((row) => ({
+    const items = rows.map((row) => ({
       playerId: row.playerId,
       kblPlayerNo: row.player.kblPlayerNo,
       koreanName: row.player.koreanName,
@@ -60,5 +59,10 @@ export class PlayersService {
       tsPct: row.tsPct,
       per: row.per,
     }));
+
+    // 경기당 득점(평균) 기준 정렬 — 시즌 누적 득점으로 정렬하면 출전 경기 수가
+    // 다른 선수끼리 순위가 왜곡된다(스탯 사이트의 표준은 경기당 평균).
+    // DB 컬럼이 아니라 계산값이라 Prisma orderBy로는 못하고 여기서 정렬한다.
+    return items.sort((a, b) => (b.pts ?? -Infinity) - (a.pts ?? -Infinity));
   }
 }
