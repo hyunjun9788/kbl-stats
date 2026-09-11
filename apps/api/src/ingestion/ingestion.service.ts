@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { Season } from '../generated/prisma/client.js';
 import { KblGameClient } from '../kbl-api/clients/kbl-game.client.js';
 import { KblMetaClient } from '../kbl-api/clients/kbl-meta.client.js';
 import { KblStatsClient } from '../kbl-api/clients/kbl-stats.client.js';
@@ -23,11 +24,19 @@ export interface IngestGameParams {
   gmkey?: string;
 }
 
-export interface IngestGameResult {
-  runId: number;
+/** 경기 한 건을 다 넣은 결과. */
+export interface IngestOneMatchResult {
   gmkey: string;
   playerGameStats: number;
   teamGameStats: number;
+}
+
+/** ingestGame 한 번 호출의 결과. gmkey 를 지정하지 않으면 games 가 여러 건일 수 있다. */
+export interface IngestGameResult {
+  runId: number;
+  games: IngestOneMatchResult[];
+  playerGameStats: number; // games 전체 합
+  teamGameStats: number; // games 전체 합
 }
 
 /** 특정 단계에서 실패했음을 나타낸다 (메시지에 단계명 + API 상세가 이미 담겨 있다). */
@@ -60,9 +69,13 @@ export class IngestionService {
       const result = await this.runContext.run(run.id, () =>
         this.runSteps(run.id, params),
       );
-      await this.repo.finishRun(run.id, 1, `gmkey=${result.gmkey}`);
+      await this.repo.finishRun(
+        run.id,
+        result.games.length,
+        `gmkey=${result.games.map((g) => g.gmkey).join(',')}`,
+      );
       this.logger.log(
-        `[run ${run.id}] done — ${result.playerGameStats} player rows, ${result.teamGameStats} team rows`,
+        `[run ${run.id}] done — ${result.games.length} game(s), ${result.playerGameStats} player rows, ${result.teamGameStats} team rows`,
       );
       return result;
     } catch (error) {
@@ -80,32 +93,54 @@ export class IngestionService {
     runId: number,
     params: IngestGameParams,
   ): Promise<IngestGameResult> {
-    // 1. 대상 경기 확정 — gmkey 만으로는 KBL API 에 날짜가 없어 match/list 조회에 날짜가 필요하다.
-    // TODO(ingestDay): 지금은 selected[0] 하나만 처리한다. 다음 단위에서 전체를 순회하도록 바꾼다.
+    // 1. 대상 경기 확정 — gmkey 없으면 그날 KBL 정규시즌 경기 전체.
     const selected = await this.resolveMatches(runId, params);
-    const match = selected[0];
 
-    // 2. 시즌
+    // 2. 시즌 + 팀 10개 전체 — 하루에 경기가 여러 건이어도 한 번만 가져온다.
+    //    (같은 날짜의 경기는 항상 같은 시즌이라고 가정하고 selected[0] 기준으로 조회)
+    const { season, teamIdByCode } = await this.ensureSeasonAndTeams(
+      runId,
+      selected[0],
+    );
+
+    // 3. 경기마다 반복 — 한 경기 처리 로직은 ingestOneMatch 에 그대로 남아있다.
+    const games: IngestOneMatchResult[] = [];
+    for (const match of selected) {
+      games.push(await this.ingestOneMatch(runId, match, season, teamIdByCode));
+    }
+
+    return {
+      runId,
+      games,
+      playerGameStats: games.reduce((sum, g) => sum + g.playerGameStats, 0),
+      teamGameStats: games.reduce((sum, g) => sum + g.teamGameStats, 0),
+    };
+  }
+
+  /** 시즌 upsert + 해당 시즌 10개 팀 upsert. 하루 배치에서 경기 수와 무관하게 한 번만 호출된다. */
+  private async ensureSeasonAndTeams(
+    runId: number,
+    sample: KblMatchRaw,
+  ): Promise<{ season: Season; teamIdByCode: Map<string, number> }> {
     const season = await this.step(runId, 'season', async () => {
       const seasons = await this.meta.getRecentSeasons();
-      const found = seasons.find((s) => s.seasonCode === match.seasonCode);
+      const found = seasons.find((s) => s.seasonCode === sample.seasonCode);
       return this.repo.upsertSeason(
         toSeasonUpsert(
           found ?? {
-            seasonCode: match.seasonCode,
-            seasonName1: match.seasonName1,
+            seasonCode: sample.seasonCode,
+            seasonName1: sample.seasonName1,
           },
         ),
       );
     });
 
-    // 3. 해당 시즌 10개 팀 전체 (teamCode "00" 합계 제외)
     const teamIdByCode = await this.step(runId, 'teams', async () => {
-      const rows = await this.stats.getTeamTraditional(match.seasonCode);
+      const rows = await this.stats.getTeamTraditional(sample.seasonCode);
       const map = new Map<string, number>();
       for (const row of rows) {
         if (row.teamCode === '00') {
-          continue;
+          continue; // 합계 행
         }
         const team = await this.repo.upsertTeam(toTeamUpsert(row));
         map.set(row.teamCode, team.id);
@@ -114,8 +149,17 @@ export class IngestionService {
       return map;
     });
 
-    // 4. 경기
-    const gameRow = await this.step(runId, 'game', () => {
+    return { season, teamIdByCode };
+  }
+
+  /** 경기 1건: Game → 박스스코어 fetch → Player → PlayerGameStat → TeamGameStat. */
+  private async ingestOneMatch(
+    runId: number,
+    match: KblMatchRaw,
+    season: Season,
+    teamIdByCode: Map<string, number>,
+  ): Promise<IngestOneMatchResult> {
+    const gameRow = await this.step(runId, `game:${match.gmkey}`, () => {
       const homeTeamId = resolveTeam(teamIdByCode, match.tcodeH, 'home');
       const awayTeamId = resolveTeam(teamIdByCode, match.tcodeA, 'away');
       return this.repo.upsertGame({
@@ -126,26 +170,29 @@ export class IngestionService {
       });
     });
 
-    // 5. 박스스코어 fetch (6·7단계에서 재사용)
-    const boxScore = await this.step(runId, 'box-score:fetch', () =>
-      this.game.getBoxScore(match.gmkey),
+    const boxScore = await this.step(
+      runId,
+      `box-score:fetch:${match.gmkey}`,
+      () => this.game.getBoxScore(match.gmkey),
     );
 
-    // 6. 박스스코어에서 확보되는 선수 정보로 Player upsert
-    const playerIdByCode = await this.step(runId, 'players', async () => {
-      const map = new Map<string, number>();
-      for (const entry of boxScore) {
-        const player = await this.repo.upsertPlayer(toPlayerUpsert(entry));
-        map.set(entry.player.pcode, player.id);
-      }
-      this.logger.log(`[run ${runId}] upserted ${map.size} player(s)`);
-      return map;
-    });
+    const playerIdByCode = await this.step(
+      runId,
+      `players:${match.gmkey}`,
+      async () => {
+        const map = new Map<string, number>();
+        for (const entry of boxScore) {
+          const player = await this.repo.upsertPlayer(toPlayerUpsert(entry));
+          map.set(entry.player.pcode, player.id);
+        }
+        this.logger.log(`[run ${runId}] upserted ${map.size} player(s)`);
+        return map;
+      },
+    );
 
-    // 7. PlayerGameStat
     const playerGameStats = await this.step(
       runId,
-      'player-game-stats',
+      `player-game-stats:${match.gmkey}`,
       async () => {
         let count = 0;
         for (const entry of boxScore) {
@@ -168,10 +215,9 @@ export class IngestionService {
       },
     );
 
-    // 8. TeamGameStat
     const teamGameStats = await this.step(
       runId,
-      'team-game-stats',
+      `team-game-stats:${match.gmkey}`,
       async () => {
         const teamRecords = await this.game.getTeamRecord(match.gmkey);
         let count = 0;
@@ -193,7 +239,7 @@ export class IngestionService {
       },
     );
 
-    return { runId, gmkey: match.gmkey, playerGameStats, teamGameStats };
+    return { gmkey: match.gmkey, playerGameStats, teamGameStats };
   }
 
   /**
