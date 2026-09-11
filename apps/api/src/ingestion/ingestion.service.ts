@@ -70,6 +70,17 @@ class IngestionStepError extends Error {
 export class IngestionService {
   private readonly logger = new Logger(IngestionService.name);
 
+  /**
+   * seasonCode 별 season/teams 캐시. 이 프로세스가 살아있는 동안만 유지된다
+   * (CLI 한 번 실행 = 새 프로세스 = 빈 캐시로 시작). ingestDateRange 가
+   * ingestGame 을 반복 호출해도 같은 IngestionService 인스턴스를 쓰므로,
+   * 같은 시즌을 다시 만나면 KBL을 다시 부르지 않고 이 캐시를 재사용한다.
+   */
+  private readonly seasonTeamsCache = new Map<
+    number,
+    { season: Season; teamIdByCode: Map<string, number> }
+  >();
+
   constructor(
     private readonly meta: KblMetaClient,
     private readonly stats: KblStatsClient,
@@ -194,6 +205,14 @@ export class IngestionService {
     runId: number,
     sample: KblMatchRaw,
   ): Promise<{ season: Season; teamIdByCode: Map<string, number> }> {
+    const cached = this.seasonTeamsCache.get(sample.seasonCode);
+    if (cached) {
+      this.logger.log(
+        `[run ${runId}] season ${sample.seasonCode} + teams already resolved this process — reusing (0 KBL calls)`,
+      );
+      return cached;
+    }
+
     const season = await this.step(runId, 'season', async () => {
       const seasons = await this.meta.getRecentSeasons();
       const found = seasons.find((s) => s.seasonCode === sample.seasonCode);
@@ -221,7 +240,9 @@ export class IngestionService {
       return map;
     });
 
-    return { season, teamIdByCode };
+    const resolved = { season, teamIdByCode };
+    this.seasonTeamsCache.set(sample.seasonCode, resolved);
+    return resolved;
   }
 
   /** 경기 1건: Game → 박스스코어 fetch → Player → PlayerGameStat → TeamGameStat. */
