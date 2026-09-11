@@ -6,7 +6,7 @@ import { PlayerAvatar } from "./player-avatar";
 import { PlayersFilterBar, type TeamOption } from "./players-filter-bar";
 import { TeamBadge } from "./team-badge";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 
 type SortKey = "games" | "pts" | "reb" | "ast" | "tsPct";
 
