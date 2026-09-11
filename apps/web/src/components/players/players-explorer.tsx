@@ -251,8 +251,10 @@ export function PlayersExplorer({ players }: { players: PlayerListItem[] }) {
         </table>
       </div>
 
-      <div className="flex items-center justify-between px-6 py-4">
-        <div className="flex items-center gap-1">
+      <div className="grid grid-cols-3 items-center px-6 py-4">
+        <div aria-hidden />
+
+        <div className="flex items-center justify-center gap-1">
           <PageButton
             aria-label="이전 페이지"
             disabled={currentPage === 1}
@@ -283,7 +285,7 @@ export function PlayersExplorer({ players }: { players: PlayerListItem[] }) {
         <select
           disabled
           defaultValue={String(PAGE_SIZE)}
-          className="cursor-not-allowed rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-foreground/60"
+          className="cursor-not-allowed justify-self-end rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-foreground/60"
         >
           <option value={PAGE_SIZE}>페이지당 {PAGE_SIZE}개</option>
         </select>
