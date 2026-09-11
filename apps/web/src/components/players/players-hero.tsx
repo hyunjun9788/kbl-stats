@@ -1,14 +1,14 @@
 export function PlayersHero() {
   return (
-    <section className="relative overflow-hidden bg-gradient-to-br from-navy-950 via-navy-900 to-navy-800 text-white">
-      {/* 실제 사진 대신 코트 링을 추상화한 장식. 저작권 있는 이미지를 쓰지 않는다. */}
+    <section className="relative overflow-hidden bg-navy-950 text-white">
+      {/* 실제 사진 배경. 왼쪽(텍스트 영역)은 어둡게 눌러 가독성을 확보한다. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute top-1/2 -right-32 h-[440px] w-[440px] -translate-y-1/2 rounded-full border-[26px] border-white/[0.06]"
+        className="absolute inset-0 bg-[url('/players-bg.webp')] bg-cover bg-right bg-no-repeat"
       />
       <div
         aria-hidden
-        className="pointer-events-none absolute top-1/2 right-20 h-[440px] w-px -translate-y-1/2 bg-white/[0.06]"
+        className="absolute inset-0 bg-gradient-to-r from-navy-950/95 via-navy-950/70 to-navy-950/40"
       />
 
       <div className="relative mx-auto flex max-w-7xl items-end justify-between gap-8 px-6 pt-14 pb-16">
@@ -20,7 +20,7 @@ export function PlayersHero() {
           </p>
         </div>
 
-        <div className="hidden shrink-0 text-right text-[11px] leading-relaxed font-semibold tracking-[0.2em] text-white/40 md:block">
+        <div className="hidden shrink-0 text-right text-[11px] leading-relaxed font-semibold tracking-[0.2em] text-white/70 md:block">
           <p>KOREA BASKETBALL LEAGUE</p>
           <p>DATA DRIVES</p>
           <p>A DEEPER GAME</p>

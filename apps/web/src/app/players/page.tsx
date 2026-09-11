@@ -12,8 +12,8 @@ export default async function PlayersPage() {
   return (
     <div>
       <PlayersHero />
-      <div className="mx-auto max-w-7xl px-6">
-        <div className="-mt-10 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
+      <div className="mx-auto max-w-7xl px-6 pt-8">
+        <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
           <PlayersFilterBar totalCount={players.length} />
           <PlayersTable players={players} />
         </div>
