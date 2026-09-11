@@ -36,6 +36,16 @@ export function turnoverPct(
   return denominator > 0 ? (100 * tov) / denominator : null;
 }
 
+/** 시즌 합계를 경기당 평균으로. Percentile 계산의 PTS/REB/AST/STL/BLK 값이 이 형태다. */
+export function perGame(total: number, games: number): number | null {
+  return games > 0 ? total / games : null;
+}
+
+/** 성공/시도 비율 (%). FG%/3P%/FT% 처럼 "시즌 합계끼리의 비율"이어야 하는 값. */
+export function ratioPct(makes: number, attempts: number): number | null {
+  return attempts > 0 ? (100 * makes) / attempts : null;
+}
+
 /**
  * B그룹 — 선수 자신의 시즌 합계 + "그 선수가 속한 팀의 시즌 전체 합계"가 필요한 지표.
  * 분/초 단위는 무관하다(분자·분모에 같은 단위가 들어가 비율에서 상쇄된다) —

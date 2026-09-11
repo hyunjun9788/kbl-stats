@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module.js';
 import { PlayerSeasonAggregator } from './player-season-aggregator.service.js';
+import { SeasonRankingAggregator } from './season-ranking-aggregator.service.js';
 import { TeamSeasonAggregator } from './team-season-aggregator.service.js';
 
 function parseSeasonCode(argv: string[]): number {
@@ -21,10 +22,11 @@ async function main(): Promise<void> {
   });
   const logger = new Logger('aggregate:season');
   try {
-    // 팀을 먼저 집계한다 — 이후 단계(USG%/AST%)가 TeamSeasonStat을 필요로 한다.
+    // 순서 고정: team(USG%/AST% 분모) → player(qualified 판정 포함) → ranking(qualified 필요)
     const teams = await app.get(TeamSeasonAggregator).aggregateSeason(seasonCode);
     const players = await app.get(PlayerSeasonAggregator).aggregateSeason(seasonCode);
-    logger.log(`OK ${JSON.stringify({ teams, players })}`);
+    const ranking = await app.get(SeasonRankingAggregator).rankSeason(seasonCode);
+    logger.log(`OK ${JSON.stringify({ teams, players, ranking })}`);
   } finally {
     await app.close();
   }

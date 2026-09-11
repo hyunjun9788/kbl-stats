@@ -7,6 +7,7 @@ import {
   turnoverPct,
   usagePct,
 } from './advanced-stats.js';
+import { isQualified } from './qualification.js';
 
 export interface AggregatePlayerSeasonResult {
   seasonCode: number;
@@ -16,10 +17,11 @@ export interface AggregatePlayerSeasonResult {
 /**
  * PlayerGameStat(경기별 선수 기록)을 선수 × 시즌으로 SUM 해 PlayerSeasonStat에 upsert 한다.
  *
- * A그룹(누적 counting, TS%/eFG%/TOV%)에 B그룹(USG%/AST%)까지 채운다. B그룹은
- * "그 선수가 속한 팀의 시즌 전체 54경기 합계"(TeamSeasonStat, 이 서비스보다 먼저
- * 실행돼야 함)가 필요하다 — 이적 선수는 마지막 소속팀 기준으로 계산한다.
- * PER(리그 전체 필요)은 다음 단계에서 채운다 — 지금은 null로 남는다.
+ * A그룹(누적 counting, TS%/eFG%/TOV%)에 B그룹(USG%/AST%)까지 채우고, percentile
+ * 모집단 자격(qualified)도 함께 판정한다. B그룹은 "그 선수가 속한 팀의 시즌 전체
+ * 54경기 합계"(TeamSeasonStat, 이 서비스보다 먼저 실행돼야 함)가 필요하다 — 이적
+ * 선수는 마지막 소속팀 기준으로 계산한다. PER(리그 전체 필요)은 다음 단계에서
+ * 채운다 — 지금은 null로 남는다.
  */
 @Injectable()
 export class PlayerSeasonAggregator {
@@ -147,6 +149,12 @@ export class PlayerSeasonAggregator {
         astPct: teamStats
           ? assistPct(ast, fgm, secondsPlayed, teamStats.secondsPlayed, teamStats.fgm)
           : null,
+        qualified: isQualified(
+          row._count._all,
+          secondsPlayed,
+          season.minGames,
+          season.minMinutesPerGame,
+        ),
       };
 
       await this.prisma.playerSeasonStat.upsert({

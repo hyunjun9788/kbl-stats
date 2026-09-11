@@ -2,10 +2,32 @@ import { describe, expect, it } from 'vitest';
 import {
   assistPct,
   effectiveFgPct,
+  perGame,
+  ratioPct,
   trueShootingPct,
   turnoverPct,
   usagePct,
 } from './advanced-stats.js';
+
+describe('perGame', () => {
+  it('divides season total by games played', () => {
+    expect(perGame(1158, 50)).toBeCloseTo(23.16, 2);
+  });
+
+  it('returns null for 0 games (avoid dividing by zero)', () => {
+    expect(perGame(0, 0)).toBeNull();
+  });
+});
+
+describe('ratioPct', () => {
+  it('computes a make/attempt percentage', () => {
+    expect(ratioPct(482, 1091)).toBeCloseTo(44.18, 2);
+  });
+
+  it('returns null when there were no attempts', () => {
+    expect(ratioPct(0, 0)).toBeNull();
+  });
+});
 
 // 시즌47(2025-26) 실제 DB 값 — 자밀 워니(서울 SK) 시즌 합계.
 const warney = {
