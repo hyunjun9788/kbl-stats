@@ -4,8 +4,9 @@ export interface TeamOption {
 }
 
 interface PlayersFilterBarProps {
-  search: string;
-  onSearchChange: (value: string) => void;
+  searchInput: string;
+  onSearchInputChange: (value: string) => void;
+  onSearchSubmit: () => void;
   team: string;
   onTeamChange: (value: string) => void;
   teamOptions: TeamOption[];
@@ -14,12 +15,18 @@ interface PlayersFilterBarProps {
   positionOptions: string[];
   totalCount: number;
   filteredCount: number;
+  isFiltered: boolean;
 }
 
-/** 표시 + 상태 반영만 한다. 상태 자체는 PlayersExplorer가 들고 있다. */
+/**
+ * 표시 + 상태 반영만 한다. 상태 자체는 PlayersExplorer가 들고 있다.
+ * 팀/포지션은 선택 즉시 반영되지만, 검색은 타이핑마다 반응하지 않고
+ * 폼 제출(Enter 또는 검색 버튼)에만 반영된다.
+ */
 export function PlayersFilterBar({
-  search,
-  onSearchChange,
+  searchInput,
+  onSearchInputChange,
+  onSearchSubmit,
   team,
   onTeamChange,
   teamOptions,
@@ -28,9 +35,8 @@ export function PlayersFilterBar({
   positionOptions,
   totalCount,
   filteredCount,
+  isFiltered,
 }: PlayersFilterBarProps) {
-  const isFiltered = search.trim() !== "" || team !== "all" || position !== "all";
-
   return (
     <div className="flex flex-col gap-4 border-b border-black/5 p-6 sm:flex-row sm:items-center">
       <div className="flex flex-1 flex-wrap items-center gap-3">
@@ -68,12 +74,26 @@ export function PlayersFilterBar({
           ))}
         </select>
 
-        <input
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="선수명 검색..."
-          className="w-48 rounded-lg border border-black/10 bg-white px-3 py-2 text-sm placeholder:text-foreground/40"
-        />
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSearchSubmit();
+          }}
+          className="flex items-center gap-2"
+        >
+          <input
+            value={searchInput}
+            onChange={(e) => onSearchInputChange(e.target.value)}
+            placeholder="선수명 검색..."
+            className="w-48 rounded-lg border border-black/10 bg-white px-3 py-2 text-sm placeholder:text-foreground/40"
+          />
+          <button
+            type="submit"
+            className="rounded-lg bg-navy-950 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-900"
+          >
+            검색
+          </button>
+        </form>
       </div>
 
       <p className="shrink-0 text-sm text-foreground/50">

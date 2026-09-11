@@ -57,7 +57,8 @@ function sortPlayers(
  * 정렬해서 보여준다 — TanStack Query 같은 서버 상태 라이브러리가 필요 없다.
  */
 export function PlayersExplorer({ players }: { players: PlayerListItem[] }) {
-  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState(""); // 타이핑 중인 값 — 필터링에 안 쓰인다
+  const [search, setSearch] = useState(""); // 제출(Enter/검색 버튼)해야 이 값이 바뀐다
   const [team, setTeam] = useState("all");
   const [position, setPosition] = useState("all");
   const [sortKey, setSortKey] = useState<SortKey>("pts");
@@ -117,8 +118,8 @@ export function PlayersExplorer({ players }: { players: PlayerListItem[] }) {
 
   // 검색/필터/정렬이 바뀌면 이전에 보던 페이지 번호가 더는 유효하지 않을 수 있으니,
   // effect가 아니라 각 변경 시점에 바로 1페이지로 되돌린다.
-  function updateSearch(value: string) {
-    setSearch(value);
+  function submitSearch() {
+    setSearch(searchInput);
     setPage(1);
   }
 
@@ -145,8 +146,9 @@ export function PlayersExplorer({ players }: { players: PlayerListItem[] }) {
   return (
     <div>
       <PlayersFilterBar
-        search={search}
-        onSearchChange={updateSearch}
+        searchInput={searchInput}
+        onSearchInputChange={setSearchInput}
+        onSearchSubmit={submitSearch}
         team={team}
         onTeamChange={updateTeam}
         teamOptions={teamOptions}
@@ -155,6 +157,7 @@ export function PlayersExplorer({ players }: { players: PlayerListItem[] }) {
         positionOptions={positionOptions}
         totalCount={players.length}
         filteredCount={filtered.length}
+        isFiltered={search.trim() !== "" || team !== "all" || position !== "all"}
       />
 
       <div className="overflow-x-auto">
