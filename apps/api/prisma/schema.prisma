@@ -40,6 +40,7 @@ model Season {
 
   games             Game[]
   playerSeasonStats PlayerSeasonStat[]
+  teamSeasonStats   TeamSeasonStat[]
   standings         TeamSeasonStanding[]
   metricRankings    SeasonMetricRanking[]
   modelEvaluations  ModelEvaluation[]
@@ -60,6 +61,7 @@ model Team {
   playerGameStats   PlayerGameStat[]
   teamGameStats     TeamGameStat[]
   playerSeasonStats PlayerSeasonStat[]
+  teamSeasonStats   TeamSeasonStat[]
   standings         TeamSeasonStanding[]
   ratingSnapshots   TeamRatingSnapshot[]
 }
@@ -294,6 +296,40 @@ model SeasonMetricRanking {
 
   @@unique([playerSeasonStatId, metric])
   @@index([seasonId, metric])
+}
+
+/// 팀 × 시즌 누적 raw counting stat. TeamGameStat 합산.
+/// TeamSeasonStanding(승패 순위, Game 결과에서 파생)과는 원천이 다르므로 분리한다.
+/// USG%/AST% 계산 시 "팀 시즌 전체 합계" 분모로 쓰인다 (PlayerSeasonStat 계산의 선행 조건).
+model TeamSeasonStat {
+  id            Int @id @default(autoincrement())
+  teamId        Int
+  seasonId      Int
+  games         Int
+  secondsPlayed Int
+
+  points Int
+  fgm    Int
+  fga    Int
+  fg3m   Int
+  fg3a   Int
+  ftm    Int
+  fta    Int
+  offReb Int
+  defReb Int
+  reb    Int
+  ast    Int
+  stl    Int
+  blk    Int
+  tov    Int
+  pf     Int
+
+  computedAt DateTime @default(now())
+
+  team   Team   @relation(fields: [teamId], references: [id])
+  season Season @relation(fields: [seasonId], references: [id])
+
+  @@unique([teamId, seasonId])
 }
 
 /// 팀 시즌 순위. Game 결과에서 파생.

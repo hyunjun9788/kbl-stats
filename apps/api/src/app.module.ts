@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AggregationModule } from './aggregation/aggregation.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { IngestionModule } from './ingestion/ingestion.module.js';
@@ -12,6 +13,7 @@ import { RunContextModule } from './run-context/run-context.module.js';
     RunContextModule,
     KblApiModule,
     IngestionModule,
+    AggregationModule,
   ],
   controllers: [AppController],
   providers: [AppService],

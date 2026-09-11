@@ -15,6 +15,7 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "ingest": "nest build && node dist/ingestion/ingestion.cli.js",
+    "aggregate:team-season": "nest build && node dist/aggregation/aggregation.cli.js",
     "lint": "oxlint src/ test/",
     "test": "vitest run",
     "test:watch": "vitest",
