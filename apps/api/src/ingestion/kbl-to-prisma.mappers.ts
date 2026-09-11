@@ -78,6 +78,23 @@ export function isKblRegularSeason(match: KblMatchRaw): boolean {
   );
 }
 
+/**
+ * match/list 응답(하루치, D리그 포함일 수 있음)에서 실제로 수집할 경기를 고른다.
+ *   - gmkey 없음 → 그날 KBL 정규시즌 경기 전체 (ingestDay 용)
+ *   - gmkey 있음 → 그 경기 하나 (없으면 빈 배열 — "못 찾음"의 표현)
+ * KBL 호출도 DB 접근도 하지 않는 순수 함수라 배열만 손으로 만들어 테스트한다.
+ */
+export function selectMatches(
+  matches: KblMatchRaw[],
+  gmkey?: string,
+): KblMatchRaw[] {
+  const regular = matches.filter(isKblRegularSeason);
+  if (!gmkey) {
+    return regular;
+  }
+  return regular.filter((m) => m.gmkey === gmkey);
+}
+
 /** "YYYYMMDD" + "HHmm" (KST) → Date */
 export function toGameKickoff(gameDate: string, gameStart: string): Date {
   const year = gameDate.slice(0, 4);

@@ -6,6 +6,7 @@ import type {
 } from '../kbl-api/kbl-api.types.js';
 import {
   isKblRegularSeason,
+  selectMatches,
   toGameKickoff,
   toGameUpsert,
   toPlayerGameStatValues,
@@ -156,6 +157,41 @@ describe('isKblRegularSeason', () => {
 
   it('rejects D-league', () => {
     expect(isKblRegularSeason({ ...base, seasonCategory: 'D1' })).toBe(false);
+  });
+});
+
+describe('selectMatches', () => {
+  const regularA = {
+    gmkey: 'S47G01N196',
+    seasonCategory: 'R',
+    gameCode: '01',
+  } as KblMatchRaw;
+  const regularB = {
+    gmkey: 'S47G01N197',
+    seasonCategory: 'R',
+    gameCode: '01',
+  } as KblMatchRaw;
+  const dLeague = {
+    gmkey: 'S48G01N59',
+    seasonCategory: 'D1',
+    gameCode: '01',
+  } as KblMatchRaw;
+  const matches = [regularA, dLeague, regularB];
+
+  it('without gmkey: returns every KBL regular-season match, dropping D-league rows', () => {
+    expect(selectMatches(matches)).toEqual([regularA, regularB]);
+  });
+
+  it('with gmkey: returns just that one match', () => {
+    expect(selectMatches(matches, 'S47G01N197')).toEqual([regularB]);
+  });
+
+  it('with an unknown gmkey: returns an empty array rather than throwing', () => {
+    expect(selectMatches(matches, 'NOPE')).toEqual([]);
+  });
+
+  it('with a D-league gmkey: still excluded, because it is not a regular-season game', () => {
+    expect(selectMatches(matches, 'S48G01N59')).toEqual([]);
   });
 });
 

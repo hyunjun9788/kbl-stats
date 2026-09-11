@@ -3,10 +3,11 @@ import { KblGameClient } from '../kbl-api/clients/kbl-game.client.js';
 import { KblMetaClient } from '../kbl-api/clients/kbl-meta.client.js';
 import { KblStatsClient } from '../kbl-api/clients/kbl-stats.client.js';
 import { KblApiError } from '../kbl-api/kbl-api.error.js';
+import type { KblMatchRaw } from '../kbl-api/kbl-api.types.js';
 import { IngestionRunContext } from '../run-context/ingestion-run.context.js';
 import { IngestionRepository } from './ingestion.repository.js';
 import {
-  isKblRegularSeason,
+  selectMatches,
   toGameUpsert,
   toPlayerGameStatValues,
   toPlayerUpsert,
@@ -80,24 +81,9 @@ export class IngestionService {
     params: IngestGameParams,
   ): Promise<IngestGameResult> {
     // 1. 대상 경기 확정 — gmkey 만으로는 KBL API 에 날짜가 없어 match/list 조회에 날짜가 필요하다.
-    const match = await this.step(runId, 'resolve-match', async () => {
-      const matches = await this.game.getMatchList(params.date, params.date);
-      const regular = matches.filter(isKblRegularSeason);
-      const target = params.gmkey
-        ? regular.find((m) => m.gmkey === params.gmkey)
-        : regular[0];
-      if (!target) {
-        throw new Error(
-          params.gmkey
-            ? `gmkey ${params.gmkey} not found among ${regular.length} regular-season game(s) on ${params.date}`
-            : `no KBL regular-season game on ${params.date} (${matches.length} row(s) returned)`,
-        );
-      }
-      this.logger.log(
-        `[run ${runId}] target ${target.gmkey}: ${target.tnameH} ${target.scoreH ?? '-'}:${target.scoreA ?? '-'} ${target.tnameA}`,
-      );
-      return target;
-    });
+    // TODO(ingestDay): 지금은 selected[0] 하나만 처리한다. 다음 단위에서 전체를 순회하도록 바꾼다.
+    const selected = await this.resolveMatches(runId, params);
+    const match = selected[0];
 
     // 2. 시즌
     const season = await this.step(runId, 'season', async () => {
@@ -208,6 +194,34 @@ export class IngestionService {
     );
 
     return { runId, gmkey: match.gmkey, playerGameStats, teamGameStats };
+  }
+
+  /**
+   * gmkey 없이는 KBL API에 날짜가 없으므로 항상 match/list 를 먼저 불러야 한다.
+   * 선택 로직 자체(selectMatches)는 순수 함수로 빼서 단위테스트하고, 여기서는
+   * "호출하고 → 못 찾으면 에러 메시지를 채워서 던진다" 만 담당한다.
+   */
+  private async resolveMatches(
+    runId: number,
+    params: IngestGameParams,
+  ): Promise<KblMatchRaw[]> {
+    return this.step(runId, 'resolve-matches', async () => {
+      const matches = await this.game.getMatchList(params.date, params.date);
+      const selected = selectMatches(matches, params.gmkey);
+      if (selected.length === 0) {
+        throw new Error(
+          params.gmkey
+            ? `gmkey ${params.gmkey} not found among regular-season games on ${params.date}`
+            : `no KBL regular-season game on ${params.date} (${matches.length} row(s) returned)`,
+        );
+      }
+      for (const m of selected) {
+        this.logger.log(
+          `[run ${runId}] match ${m.gmkey}: ${m.tnameH} ${m.scoreH ?? '-'}:${m.scoreA ?? '-'} ${m.tnameA}`,
+        );
+      }
+      return selected;
+    });
   }
 
   private async step<T>(
