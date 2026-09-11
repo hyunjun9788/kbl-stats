@@ -6,6 +6,7 @@ import { KblStatsClient } from '../kbl-api/clients/kbl-stats.client.js';
 import { KblApiError } from '../kbl-api/kbl-api.error.js';
 import type { KblMatchRaw } from '../kbl-api/kbl-api.types.js';
 import { IngestionRunContext } from '../run-context/ingestion-run.context.js';
+import { enumerateDates } from './date-range.js';
 import { IngestionRepository } from './ingestion.repository.js';
 import {
   selectMatches,
@@ -20,7 +21,7 @@ import {
 export interface IngestGameParams {
   /** YYYYMMDD (KST) */
   date: string;
-  /** 생략 시 해당 날짜의 첫 KBL 정규시즌 경기 */
+  /** 생략 시 그날 KBL 정규시즌 경기 전체. 지정하면 그 경기 1건만. */
   gmkey?: string;
 }
 
@@ -37,6 +38,24 @@ export interface IngestGameResult {
   games: IngestOneMatchResult[];
   playerGameStats: number; // games 전체 합
   teamGameStats: number; // games 전체 합
+}
+
+export interface IngestDateRangeParams {
+  /** YYYYMMDD, 양끝 포함 */
+  from: string;
+  to: string;
+}
+
+export interface IngestDateRangeResult {
+  from: string;
+  to: string;
+  days: number;
+  succeeded: number; // ingestGame 이 예외 없이 끝난 날짜 수 (경기 0건인 휴식일 포함)
+  failed: number;
+  totalGames: number;
+  totalPlayerGameStats: number;
+  totalTeamGameStats: number;
+  failures: Array<{ date: string; error: string }>;
 }
 
 /** 특정 단계에서 실패했음을 나타낸다 (메시지에 단계명 + API 상세가 이미 담겨 있다). */
@@ -89,6 +108,54 @@ export class IngestionService {
       this.logger.error(`[run ${run.id}] FAILED — ${detail}`);
       throw error;
     }
+  }
+
+  /**
+   * ingestGame(하루 단위, 자체 IngestionRun 생성)을 날짜 수만큼 반복 호출한다.
+   * 별도 IngestionRun 은 만들지 않는다 — 각 날짜가 이미 자기 run을 갖는다.
+   * 하루가 실패해도 멈추지 않고 다음 날짜로 넘어간다 (한 달 backfill 중 하루
+   * KBL API가 잠깐 흔들렸다고 나머지 29일까지 버릴 이유가 없다).
+   */
+  async ingestDateRange(
+    params: IngestDateRangeParams,
+  ): Promise<IngestDateRangeResult> {
+    const dates = enumerateDates(params.from, params.to);
+    this.logger.log(
+      `ingestDateRange ${params.from}..${params.to} (${dates.length} day(s))`,
+    );
+
+    const result: IngestDateRangeResult = {
+      from: params.from,
+      to: params.to,
+      days: dates.length,
+      succeeded: 0,
+      failed: 0,
+      totalGames: 0,
+      totalPlayerGameStats: 0,
+      totalTeamGameStats: 0,
+      failures: [],
+    };
+
+    for (const date of dates) {
+      try {
+        const day = await this.ingestGame({ date });
+        result.succeeded += 1;
+        result.totalGames += day.games.length;
+        result.totalPlayerGameStats += day.playerGameStats;
+        result.totalTeamGameStats += day.teamGameStats;
+      } catch (error) {
+        result.failed += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        result.failures.push({ date, error: message });
+        this.logger.warn(`ingestDateRange: ${date} failed, continuing — ${message}`);
+      }
+    }
+
+    this.logger.log(
+      `ingestDateRange done — ${result.succeeded}/${result.days} day(s) ok, ` +
+        `${result.totalGames} game(s), ${result.failed} failure(s)`,
+    );
+    return result;
   }
 
   private async runSteps(

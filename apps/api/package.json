@@ -14,7 +14,7 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
-    "ingest:game": "nest build && node dist/ingestion/ingestion.cli.js",
+    "ingest": "nest build && node dist/ingestion/ingestion.cli.js",
     "lint": "oxlint src/ test/",
     "test": "vitest run",
     "test:watch": "vitest",
