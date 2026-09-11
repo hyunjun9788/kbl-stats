@@ -4,6 +4,7 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { IngestionModule } from './ingestion/ingestion.module.js';
 import { KblApiModule } from './kbl-api/kbl-api.module.js';
+import { PlayersModule } from './players/players.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { RunContextModule } from './run-context/run-context.module.js';
 
@@ -14,6 +15,7 @@ import { RunContextModule } from './run-context/run-context.module.js';
     KblApiModule,
     IngestionModule,
     AggregationModule,
+    PlayersModule,
   ],
   controllers: [AppController],
   providers: [AppService],
