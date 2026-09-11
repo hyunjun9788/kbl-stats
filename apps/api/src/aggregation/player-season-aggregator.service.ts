@@ -1,6 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { effectiveFgPct, trueShootingPct, turnoverPct } from './advanced-stats.js';
+import {
+  assistPct,
+  effectiveFgPct,
+  trueShootingPct,
+  turnoverPct,
+  usagePct,
+} from './advanced-stats.js';
 
 export interface AggregatePlayerSeasonResult {
   seasonCode: number;
@@ -10,9 +16,10 @@ export interface AggregatePlayerSeasonResult {
 /**
  * PlayerGameStat(경기별 선수 기록)을 선수 × 시즌으로 SUM 해 PlayerSeasonStat에 upsert 한다.
  *
- * 이번 단계(A그룹)에서 채우는 것: 누적 counting 전부 + TS%/eFG%/TOV% — 선수 자신의
- * 시즌 합계만으로 계산되는 지표. USG%/AST%(팀 시즌 합계 필요)와 PER(리그 전체 필요)은
- * 다음 단계에서 채운다 — 지금은 null로 남는다.
+ * A그룹(누적 counting, TS%/eFG%/TOV%)에 B그룹(USG%/AST%)까지 채운다. B그룹은
+ * "그 선수가 속한 팀의 시즌 전체 54경기 합계"(TeamSeasonStat, 이 서비스보다 먼저
+ * 실행돼야 함)가 필요하다 — 이적 선수는 마지막 소속팀 기준으로 계산한다.
+ * PER(리그 전체 필요)은 다음 단계에서 채운다 — 지금은 null로 남는다.
  */
 @Injectable()
 export class PlayerSeasonAggregator {
@@ -72,6 +79,12 @@ export class PlayerSeasonAggregator {
       latestTeamByPlayer.set(row.playerId, row.teamId);
     }
 
+    // B그룹 분모용 팀 시즌 합계. TeamSeasonAggregator가 이 서비스보다 먼저 실행돼 있어야 한다.
+    const teamSeasonStats = await this.prisma.teamSeasonStat.findMany({
+      where: { seasonId: season.id },
+    });
+    const teamStatsByTeam = new Map(teamSeasonStats.map((t) => [t.teamId, t]));
+
     for (const row of sums) {
       const s = row._sum;
       const teamId = latestTeamByPlayer.get(row.playerId);
@@ -86,12 +99,21 @@ export class PlayerSeasonAggregator {
       const fg3m = s.fg3m ?? 0;
       const fta = s.fta ?? 0;
       const tov = s.tov ?? 0;
+      const ast = s.ast ?? 0;
+      const secondsPlayed = s.secondsPlayed ?? 0;
+
+      const teamStats = teamStatsByTeam.get(teamId);
+      if (!teamStats) {
+        this.logger.warn(
+          `player ${row.playerId}: no TeamSeasonStat for team ${teamId} — run aggregate:team-season first. USG%/AST% will be null.`,
+        );
+      }
 
       const data = {
         teamId,
         games: row._count._all,
         gamesStarted: startersByPlayer.get(row.playerId) ?? 0,
-        secondsPlayed: s.secondsPlayed ?? 0,
+        secondsPlayed,
         points,
         fgm,
         fga,
@@ -102,7 +124,7 @@ export class PlayerSeasonAggregator {
         offReb: s.offReb ?? 0,
         defReb: s.defReb ?? 0,
         reb: s.reb ?? 0,
-        ast: s.ast ?? 0,
+        ast,
         stl: s.stl ?? 0,
         blk: s.blk ?? 0,
         tov,
@@ -110,6 +132,21 @@ export class PlayerSeasonAggregator {
         tsPct: trueShootingPct(points, fga, fta),
         efgPct: effectiveFgPct(fgm, fg3m, fga),
         tovPct: turnoverPct(tov, fga, fta),
+        usgPct: teamStats
+          ? usagePct(
+              fga,
+              fta,
+              tov,
+              secondsPlayed,
+              teamStats.secondsPlayed,
+              teamStats.fga,
+              teamStats.fta,
+              teamStats.tov,
+            )
+          : null,
+        astPct: teamStats
+          ? assistPct(ast, fgm, secondsPlayed, teamStats.secondsPlayed, teamStats.fgm)
+          : null,
       };
 
       await this.prisma.playerSeasonStat.upsert({

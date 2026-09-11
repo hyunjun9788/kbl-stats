@@ -35,3 +35,44 @@ export function turnoverPct(
   const denominator = fga + 0.44 * fta + tov;
   return denominator > 0 ? (100 * tov) / denominator : null;
 }
+
+/**
+ * B그룹 — 선수 자신의 시즌 합계 + "그 선수가 속한 팀의 시즌 전체 합계"가 필요한 지표.
+ * 분/초 단위는 무관하다(분자·분모에 같은 단위가 들어가 비율에서 상쇄된다) —
+ * 우리는 secondsPlayed를 그대로 넘기면 된다.
+ */
+
+/**
+ * Usage % = 100 × ((FGA+0.44FTA+TOV) × (팀_MP/5)) / (MP × (팀_FGA+0.44팀_FTA+팀_TOV))
+ * spike/README.md 4장: 자밀 워니 실측값으로 36.3%가 나옴을 확인(팀=시즌 전체 54경기 합계).
+ */
+export function usagePct(
+  playerFga: number,
+  playerFta: number,
+  playerTov: number,
+  playerSeconds: number,
+  teamSeconds: number,
+  teamFga: number,
+  teamFta: number,
+  teamTov: number,
+): number | null {
+  const numerator =
+    (playerFga + 0.44 * playerFta + playerTov) * (teamSeconds / 5);
+  const denominator = playerSeconds * (teamFga + 0.44 * teamFta + teamTov);
+  return denominator > 0 ? (100 * numerator) / denominator : null;
+}
+
+/** Assist % = 100 × AST / (((MP / (팀_MP/5)) × 팀_FGM) − FGM) */
+export function assistPct(
+  playerAst: number,
+  playerFgm: number,
+  playerSeconds: number,
+  teamSeconds: number,
+  teamFgm: number,
+): number | null {
+  if (teamSeconds <= 0) {
+    return null;
+  }
+  const denominator = (playerSeconds / (teamSeconds / 5)) * teamFgm - playerFgm;
+  return denominator > 0 ? (100 * playerAst) / denominator : null;
+}
