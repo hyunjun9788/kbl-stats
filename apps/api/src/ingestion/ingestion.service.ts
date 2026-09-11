@@ -72,7 +72,9 @@ export class IngestionService {
       await this.repo.finishRun(
         run.id,
         result.games.length,
-        `gmkey=${result.games.map((g) => g.gmkey).join(',')}`,
+        result.games.length > 0
+          ? `gmkey=${result.games.map((g) => g.gmkey).join(',')}`
+          : `no games on ${params.date} (off day)`,
       );
       this.logger.log(
         `[run ${run.id}] done — ${result.games.length} game(s), ${result.playerGameStats} player rows, ${result.teamGameStats} team rows`,
@@ -93,8 +95,11 @@ export class IngestionService {
     runId: number,
     params: IngestGameParams,
   ): Promise<IngestGameResult> {
-    // 1. 대상 경기 확정 — gmkey 없으면 그날 KBL 정규시즌 경기 전체.
+    // 1. 대상 경기 확정 — gmkey 없으면 그날 KBL 정규시즌 경기 전체 (0건일 수 있다 = 휴식일).
     const selected = await this.resolveMatches(runId, params);
+    if (selected.length === 0) {
+      return { runId, games: [], playerGameStats: 0, teamGameStats: 0 };
+    }
 
     // 2. 시즌 + 팀 10개 전체 — 하루에 경기가 여러 건이어도 한 번만 가져온다.
     //    (같은 날짜의 경기는 항상 같은 시즌이라고 가정하고 selected[0] 기준으로 조회)
@@ -254,13 +259,22 @@ export class IngestionService {
     return this.step(runId, 'resolve-matches', async () => {
       const matches = await this.game.getMatchList(params.date, params.date);
       const selected = selectMatches(matches, params.gmkey);
+
       if (selected.length === 0) {
-        throw new Error(
-          params.gmkey
-            ? `gmkey ${params.gmkey} not found among regular-season games on ${params.date}`
-            : `no KBL regular-season game on ${params.date} (${matches.length} row(s) returned)`,
+        // gmkey를 지정했는데 못 찾았으면 진짜 에러 — 그런 경기는 없다는 뜻.
+        if (params.gmkey) {
+          throw new Error(
+            `gmkey ${params.gmkey} not found among regular-season games on ${params.date}`,
+          );
+        }
+        // gmkey 없이 하루 전체를 봤는데 0건인 건 실패가 아니라 휴식일.
+        // backfill이 날짜 범위를 반복할 때마다 이런 날이 정상적으로 섞여 들어온다.
+        this.logger.log(
+          `[run ${runId}] no KBL regular-season game on ${params.date} (${matches.length} row(s) returned) — treated as an off day`,
         );
+        return [];
       }
+
       for (const m of selected) {
         this.logger.log(
           `[run ${runId}] match ${m.gmkey}: ${m.tnameH} ${m.scoreH ?? '-'}:${m.scoreA ?? '-'} ${m.tnameA}`,
