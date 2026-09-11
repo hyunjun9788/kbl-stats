@@ -292,24 +292,36 @@ export function PlayersExplorer({ players }: { players: PlayerListItem[] }) {
   );
 }
 
-/** 1 2 3 4 5 … 21 처럼 앞/뒤/현재 주변만 보여주고 나머지는 … 로 접는다. */
-function pageNumbers(current: number, total: number): (number | "…")[] {
-  if (total <= 7) {
-    return Array.from({ length: total }, (_, i) => i + 1);
-  }
-  const keep = new Set([1, 2, total - 1, total, current - 1, current, current + 1]);
-  const sorted = [...keep].filter((n) => n >= 1 && n <= total).sort((a, b) => a - b);
+function range(start: number, end: number): number[] {
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+}
 
-  const result: (number | "…")[] = [];
-  let prev = 0;
-  for (const n of sorted) {
-    if (prev && n - prev > 1) {
-      result.push("…");
-    }
-    result.push(n);
-    prev = n;
+/**
+ * 1 … 3 4 5 … 11 처럼 현재 페이지를 중심으로 좌우 대칭인 창 + 처음/끝만 보여준다.
+ * "1 2 3 4 5 … 10 11"(비대칭) 대신 표준적인 가운데 정렬 페이지네이션 패턴.
+ */
+function pageNumbers(
+  current: number,
+  total: number,
+  siblingCount = 1,
+): (number | "…")[] {
+  const totalNumbers = siblingCount * 2 + 5; // 처음 + 끝 + 현재 + 양옆 형제 + 여유
+  if (total <= totalNumbers) {
+    return range(1, total);
   }
-  return result;
+
+  const leftSibling = Math.max(current - siblingCount, 1);
+  const rightSibling = Math.min(current + siblingCount, total);
+  const showLeftDots = leftSibling > 2;
+  const showRightDots = rightSibling < total - 1;
+
+  if (!showLeftDots && showRightDots) {
+    return [...range(1, 3 + 2 * siblingCount), "…", total];
+  }
+  if (showLeftDots && !showRightDots) {
+    return [1, "…", ...range(total - (3 + 2 * siblingCount) + 1, total)];
+  }
+  return [1, "…", ...range(leftSibling, rightSibling), "…", total];
 }
 
 function PageButton({
